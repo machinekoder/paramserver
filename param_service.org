@@ -1,0 +1,60 @@
+* Parameter service implementation
+
+** ROS parameter server
+   https://github.com/ros/ros_comm.git
+   sudo pip install catkin_pkg
+   sudo apt-get install python-yaml
+
+   install rosgraph and rosparam
+
+** libelektra
+   Python examples:
+   https://github.com/ElektraInitiative/libelektra/tree/master/src/bindings/swig/python/examples
+
+   https://github.com/ElektraInitiative/libelektra
+
+   sudo apt-get install cmake git ca-certificates build-essential
+   git clone https://github.com/ElektraInitiative/libelektra.git elektra
+   mkdir -p build
+   cd build
+   cmake -DPLUGINS=ALL -DBINDINGS=ALL ../elektra
+   make
+   sudo make install
+   sudo ldconfig
+
+*** Adding elektra group
+    sudo groupadd elektra
+    sudo adduser aroessler elektra
+    sudo chgrp -R elektra /etc/kdb
+    sudo chmod -R g+rw /etc/kdb
+
+*** Mount an ini file
+    kdb mount mkwrapper.ini /foobar ini dbus
+    kdb file user/foobar
+    kdb ls user/foobar
+
+    mount to system for full path
+    kdb mount `pwd`/mkwrapper.ini system/testus ini dbus
+
+*** dbus module
+    dbus_message_append_args to notify with path
+    https://github.com/ElektraInitiative/libelektra/blob/master/src/plugins/dbus/sendmessage.c#L25
+
+    http://maemo.org/api_refs/4.0/dbus/group__DBusMessage.html
+    http://dbus.freedesktop.org/doc/dbus-python/api/dbus.bus.BusConnection-class.html#add_signal_receiver
+**** System monitor
+     dbus-monitor --system type='signal',interface='org.libelektra',path='/org/libelektra/configuration'
+
+*** Installation
+    apt-get source -b
+
+** ztrie
+   https://github.com/mhaberler/ztrie
+
+At: /build/elektra-Dhtdr2/elektra-0.8.7/src/libloader/dl.c:72
+Reason: libelektra-sync.so: cannot open shared object file: No such file or directory
+
+$ locate libelektra-sync.so
+/home/aroessler/libelektra/build/lib/libelektra-sync.so
+
+$ sudo cp /home/aroessler/libelektra/build/lib/libelektra-sync.so /usr/lib/i386-linux-gnu/elektra4/
