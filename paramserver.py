@@ -15,19 +15,18 @@ class ParamServer():
     def __init__(self, debug=False):
         self.debug = debug
         try:
-            loop = DBusGMainLoop()
-            self.system_bus = dbus.SystemBus(mainloop=loop)
-            self.system_bus.add_signal_receiver(self.elektra_dbus_connect_cb,
-                                                signal_name=None,
-                                                dbus_interface="org.libelektra",
-                                                path="/org/libelektra/configuration")
+            DBusGMainLoop(set_as_default=True)
+            self.bus = dbus.SystemBus()
+            self.bus.add_signal_receiver(self.elektra_dbus_cb,
+                                         signal_name="KeyChanged",
+                                         dbus_interface="org.libelektra",
+                                         path="/org/libelektra/configuration")
         except dbus.DBusException, e:
             print(str(e))
             sys.exit(1)
 
-    def elektra_dbus_connect_cb(self, a):
-        print('aquired')
-        print(a)
+    def elektra_dbus_cb(self, key):
+        print('key changed %s' % key)
 
 
 #with kdb.KDB() as db:
