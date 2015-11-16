@@ -15,7 +15,8 @@ import threading
 from machinekit import service
 from machinekit import config
 from machinetalk.protobuf.message_pb2 import Container
-from machinetalk.protobuf.types_pb2 import * 
+from machinetalk.protobuf.types_pb2 import *
+from machinetalk.protobuf.object_pb2 import ProtocolParameters
 
 if sys.version_info >= (3, 0):
     import configparser
@@ -99,10 +100,22 @@ class ParamServer():
             sys.exit(1)
 
     def elektra_dbus_key_changed_cb(self, key):
-        print('key changed %s' % key)
+        if self.debug:
+            print('key changed %s' % key)
+
+        for s in self.subscriptions:
+            if s in key:
+                self.incremental_update(s, str(key))
+                return
 
     def elektra_dbus_key_added_cb(self, key):
-        print('key added %s' % key)
+        if self.debug:
+            print('key added %s' % key)
+
+        for s in self.subscriptions:
+            if s in key:
+                self.incremental_update(s, str(key))
+                return
 
     def elektra_dbus_key_deleted_cb(self, key):
         print('key deleted %s' % key)
@@ -137,10 +150,21 @@ class ParamServer():
             ks = kdb.KeySet()
             db.get(ks, basekey)
             for k in ks:
-                print(k.name)
+                key = self.tx.keys.add()
+                key.name = k.name
+                # TODO guess value type
+        self.send_param_msg(basekey, MT_PARAM_FULL_UPDATE)
 
-    def incremental_update(self, key):
-        pass
+    def incremental_update(self, basekey, key):
+        with kdb.KDB() as db:
+            ks = kdb.KeySet()
+            db.get(ks, basekey)
+            k = ks[key]
+            paramKey = self.tx.keys.add()
+            paramKey.name = k.name
+            # TODO guess value type
+            print(basekey)
+        self.send_param_msg(basekey, MT_PARAM_INCREMENTAL_UPDATE)
 
     def process_param(self, s):
         try:
@@ -159,6 +183,19 @@ class ParamServer():
 
         except zmq.ZMQError as e:
             printError('ZMQ error: ' + str(e))
+
+    def add_pparams(self):
+        parameters = ProtocolParameters()
+        parameters.keepalive_timer = int(self.pingInterval * 1000.0)
+        self.txCommand.pparams.MergeFrom(parameters)
+
+    def send_param_msg(self, topic, msgType):
+        if self.debug:
+            print('sending param message')
+        self.tx.type = msgType
+        txBuffer = self.tx.SerializeToString()
+        self.tx.Clear()
+        self.paramSocket.send_multipart([topic, txBuffer], zmq.NOBLOCK)
 
     def send_command_msg(self, identity, msgType):
         self.txCommand.type = msgType
