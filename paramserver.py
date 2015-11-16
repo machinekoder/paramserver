@@ -132,6 +132,16 @@ class ParamServer():
         self.paramService.unpublish()
         self.commandService.unpublish()
 
+    def full_update(self, basekey):
+        with kdb.KDB() as db:
+            ks = kdb.KeySet()
+            db.get(ks, basekey)
+            for k in ks:
+                print(k.name)
+
+    def incremental_update(self, key):
+        pass
+
     def process_param(self, s):
         try:
             rc = s.recv()
@@ -140,7 +150,7 @@ class ParamServer():
 
             if status:
                 self.subscriptions.add(subscription)
-                # TODO full update
+                self.full_update(subscription)
             else:
                 self.subscriptions.remove(subscription)
 
@@ -176,8 +186,6 @@ class ParamServer():
 
     def stop(self):
         self.shutdown.set()
-#with kdb.KDB() as db:
-#    pass
 
 
 def main():
