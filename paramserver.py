@@ -15,6 +15,7 @@ import threading
 from machinekit import service
 from machinekit import config
 from machinetalk.protobuf.message_pb2 import Container
+from machinetalk.protobuf.types_pb2 import * 
 
 if sys.version_info >= (3, 0):
     import configparser
@@ -37,8 +38,8 @@ class ParamServer():
         self.rx = Container()
         self.tx = Container()
         self.txCommand = Container()
-        self.paramSubscribed = False
-        self.paramFullUpdate = False
+        self.subscriptions = set()
+        self.fullUpdates = set()
 
         self.context = context
         self.baseUri = "tcp://"
@@ -81,16 +82,30 @@ class ParamServer():
         try:
             DBusGMainLoop(set_as_default=True)
             bus = dbus.SystemBus()  # may use session bus for user db
-            bus.add_signal_receiver(self.elektra_dbus_cb,
+            bus.add_signal_receiver(self.elektra_dbus_key_changed_cb,
                                     signal_name="KeyChanged",
+                                    dbus_interface="org.libelektra",
+                                    path="/org/libelektra/configuration")
+            bus.add_signal_receiver(self.elektra_dbus_key_added_cb,
+                                    signal_name="KeyAdded",
+                                    dbus_interface="org.libelektra",
+                                    path="/org/libelektra/configuration")
+            bus.add_signal_receiver(self.elektra_dbus_key_deleted_cb,
+                                    signal_name="KeyDeleted",
                                     dbus_interface="org.libelektra",
                                     path="/org/libelektra/configuration")
         except dbus.DBusException, e:
             print(str(e))
             sys.exit(1)
 
-    def elektra_dbus_cb(self, key):
+    def elektra_dbus_key_changed_cb(self, key):
         print('key changed %s' % key)
+
+    def elektra_dbus_key_added_cb(self, key):
+        print('key added %s' % key)
+
+    def elektra_dbus_key_deleted_cb(self, key):
+        print('key deleted %s' % key)
 
     def process_sockets(self):
         poll = zmq.Poller()
@@ -123,9 +138,11 @@ class ParamServer():
             subscription = rc[1:]
             status = (rc[0] == "\x01")
 
-            if subscription == 'param':
-                self.paramSubscribed = status
-                self.paramFullUpdate = status
+            if status:
+                self.subscriptions.add(subscription)
+                # TODO full update
+            else:
+                self.subscriptions.remove(subscription)
 
             if self.debug:
                 print(("process param called " + subscription + ' ' + str(status)))
