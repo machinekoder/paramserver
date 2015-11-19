@@ -1,3 +1,4 @@
+#+STARTUP: showall
 * Parameter service implementation
 
 ** ROS parameter server
@@ -47,6 +48,14 @@
 
 *** Installation
     apt-get source -b
+
+*** Defaults, Priority usw.
+kdb mount `pwd`/defaults.ini spec/machinekit/cnc ni
+kdb mount `pwd`/mkwrapper.ini system/machinekit/cnc ini dbus
+
+
+stored in nickle format
+
 
 ** ztrie
    https://github.com/mhaberler/ztrie

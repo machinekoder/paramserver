@@ -17,6 +17,7 @@ from machinekit import config
 from machinetalk.protobuf.message_pb2 import Container
 from machinetalk.protobuf.types_pb2 import *
 from machinetalk.protobuf.object_pb2 import ProtocolParameters
+from machinetalk.protobuf.param_pb2 import *
 
 if sys.version_info >= (3, 0):
     import configparser
@@ -105,7 +106,7 @@ class ParamServer():
 
         for s in self.subscriptions:
             if s in key:
-                self.incremental_update(s, str(key))
+                self.incremental_update(str(key), s)
                 return
 
     def elektra_dbus_key_added_cb(self, key):
@@ -114,11 +115,13 @@ class ParamServer():
 
         for s in self.subscriptions:
             if s in key:
-                self.incremental_update(s, str(key))
+                self.incremental_update(str(key), s)
                 return
 
     def elektra_dbus_key_deleted_cb(self, key):
-        print('key deleted %s' % key)
+        if self.debug:
+            print('key deleted %s' % key)
+        self.incremental_update(key, delete=True)
 
     def process_sockets(self):
         poll = zmq.Poller()
@@ -145,25 +148,70 @@ class ParamServer():
         self.paramService.unpublish()
         self.commandService.unpublish()
 
+    # type guessing helpers from http://stackoverflow.com/questions/7019283/automatically-type-cast-parameters-in-python
+    def boolify(self, s):
+        s = s.lower()
+        if s == 'true':
+            return True
+        if s == 'false':
+            return False
+        raise ValueError('Not Boolean Value!')
+
+    def estimateType(self, var):
+        '''guesses the str representation of the variables type'''
+        casters = [[self.boolify, PARAM_TYPE_BOOLEAN],
+                   [int, PARAM_TYPE_INTEGER],
+                   [float, PARAM_TYPE_DOUBLE],
+                   [str, PARAM_TYPE_STRING]]
+        for caster in casters:
+            try:
+                print(caster[1])
+                return (caster[0](var), caster[1])
+            except ValueError:
+                pass
+        return (var, PARAM_TYPE_STRING)
+
+    def convert_key(self, paramKey, elektraKey):
+        paramKey.name = elektraKey.name
+        # get meta check/type before trying to convert
+        if elektraKey.isBinary():
+            paramKey.type = PARAM_TYPE_BINARY
+            paramKey.v_binary = bytes(elektraKey.binary)
+        else:
+            (value, valueType) = self.estimateType(str(elektraKey.value))
+            paramKey.type = valueType
+            if valueType == PARAM_TYPE_STRING:
+                paramKey.v_string = str(value)
+            elif valueType == PARAM_TYPE_BOOLEAN:
+                paramKey.v_bool = bool(value)
+            elif valueType == PARAM_TYPE_INTEGER:
+                paramKey.v_int = int(value)
+            elif valueType == PARAM_TYPE_DOUBLE:
+                paramKey.v_double = float(value)
+            else:
+                print('Warning: type guessing failed')
+
     def full_update(self, basekey):
         with kdb.KDB() as db:
             ks = kdb.KeySet()
             db.get(ks, basekey)
             for k in ks:
-                key = self.tx.keys.add()
-                key.name = k.name
-                # TODO guess value type
+                key = self.tx.key.add()
+                self.convert_key(key, k)
         self.send_param_msg(basekey, MT_PARAM_FULL_UPDATE)
 
-    def incremental_update(self, basekey, key):
-        with kdb.KDB() as db:
-            ks = kdb.KeySet()
-            db.get(ks, basekey)
-            k = ks[key]
-            paramKey = self.tx.keys.add()
-            paramKey.name = k.name
-            # TODO guess value type
-            print(basekey)
+    def incremental_update(self, key, basekey='', delete=False):
+        if not delete:
+            with kdb.KDB() as db:
+                ks = kdb.KeySet()
+                db.get(ks, basekey)
+                k = ks[key]
+                paramKey = self.tx.key.add()
+                self.convert_key(paramKey, k)
+        else:
+            paramKey = self.tx.key.add()
+            paramKey.name = key
+            paramKey.delete = True
         self.send_param_msg(basekey, MT_PARAM_INCREMENTAL_UPDATE)
 
     def process_param(self, s):
@@ -216,6 +264,12 @@ class ParamServer():
 
         if self.rx.type == MT_PING:
             self.send_command_msg(identity, MT_PING_ACKNOWLEDGE)
+
+        elif self.rx.type == MT_PARAM_SET:
+            pass
+
+        elif self.rx.type == MT_PARAM_DELETE:
+            pass
 
         else:
             self.txCommand.note.append("unknown command")
