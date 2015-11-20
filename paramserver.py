@@ -108,7 +108,7 @@ class ParamServer():
             print('key changed %s' % key)
 
         for s in self.subscriptions:
-            if s in key:
+            if key.startswith(s):
                 self.incremental_update(str(key), s)
                 return
 
@@ -117,7 +117,7 @@ class ParamServer():
             print('key added %s' % key)
 
         for s in self.subscriptions:
-            if s in key:
+            if key.startswith(s):
                 self.incremental_update(str(key), s)
                 return
 
@@ -294,7 +294,7 @@ class ParamServer():
     def set_key(self, key):
         if not key.HasField('name'):
             return False
-        name = key.name
+        name = str(key.name)
         value = None
         if key.type == PARAM_STRING:
             if not key.HasField('paramstring'):
@@ -317,12 +317,12 @@ class ParamServer():
                 return False
             return False  # TODO: implement
         for s in self.subscriptions:
-            if s in name:
+            if name.startswith(s):
                 with kdb.KDB() as db:
                     ks = kdb.KeySet()
-                    db.get(ks, basekey)
-                    k = ks[key]
-                    k.setValue(value)
+                    db.get(ks, s)
+                    ks[name].string = value
+                    db.set(ks, s)
                 return True
         return False
 
