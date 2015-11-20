@@ -30,6 +30,8 @@ class ParamServer():
                  pingInterval=2.0, loopback=False):
         self.debug = debug
         self.threads = []
+        self.timerLock = threading.Lock()
+        self.paramTimer = None
         self.shutdown = threading.Event()
         self.running = False
 
@@ -77,6 +79,7 @@ class ParamServer():
         self.connect_dbus()  # before publish to set mainloop
         self.publish()
 
+        self.start_param_heartbeat()
         threading.Thread(target=self.process_sockets).start()
         self.running = True
 
@@ -159,35 +162,34 @@ class ParamServer():
 
     def estimateType(self, var):
         '''guesses the str representation of the variables type'''
-        casters = [[self.boolify, PARAM_TYPE_BOOLEAN],
-                   [int, PARAM_TYPE_INTEGER],
-                   [float, PARAM_TYPE_DOUBLE],
-                   [str, PARAM_TYPE_STRING]]
+        casters = [[self.boolify, PARAM_BOOLEAN],
+                   [int, PARAM_INTEGER],
+                   [float, PARAM_DOUBLE],
+                   [str, PARAM_STRING]]
         for caster in casters:
             try:
-                print(caster[1])
                 return (caster[0](var), caster[1])
             except ValueError:
                 pass
-        return (var, PARAM_TYPE_STRING)
+        return (var, PARAM_STRING)
 
     def convert_key(self, paramKey, elektraKey):
         paramKey.name = elektraKey.name
         # get meta check/type before trying to convert
         if elektraKey.isBinary():
-            paramKey.type = PARAM_TYPE_BINARY
-            paramKey.v_binary = bytes(elektraKey.binary)
+            paramKey.type = PARAM_BINARY
+            paramKey.parambinary = bytes(elektraKey.binary)
         else:
             (value, valueType) = self.estimateType(str(elektraKey.value))
             paramKey.type = valueType
-            if valueType == PARAM_TYPE_STRING:
-                paramKey.v_string = str(value)
-            elif valueType == PARAM_TYPE_BOOLEAN:
-                paramKey.v_bool = bool(value)
-            elif valueType == PARAM_TYPE_INTEGER:
-                paramKey.v_int = int(value)
-            elif valueType == PARAM_TYPE_DOUBLE:
-                paramKey.v_double = float(value)
+            if valueType == PARAM_STRING:
+                paramKey.paramstring = str(value)
+            elif valueType == PARAM_BOOLEAN:
+                paramKey.parambool = bool(value)
+            elif valueType == PARAM_INTEGER:
+                paramKey.paramint = int(value)
+            elif valueType == PARAM_DOUBLE:
+                paramKey.paramdouble = float(value)
             else:
                 print('Warning: type guessing failed')
 
@@ -198,6 +200,7 @@ class ParamServer():
             for k in ks:
                 key = self.tx.key.add()
                 self.convert_key(key, k)
+        self.add_pparams()
         self.send_param_msg(basekey, MT_PARAM_FULL_UPDATE)
 
     def incremental_update(self, key, basekey='', delete=False):
@@ -211,8 +214,12 @@ class ParamServer():
         else:
             paramKey = self.tx.key.add()
             paramKey.name = key
-            paramKey.delete = True
+            paramKey.deleted = True
         self.send_param_msg(basekey, MT_PARAM_INCREMENTAL_UPDATE)
+
+    def ping_param(self):
+        for s in self.subscriptions:
+            self.send_param_msg(s, MT_PING)
 
     def process_param(self, s):
         try:
@@ -235,7 +242,7 @@ class ParamServer():
     def add_pparams(self):
         parameters = ProtocolParameters()
         parameters.keepalive_timer = int(self.pingInterval * 1000.0)
-        self.txCommand.pparams.MergeFrom(parameters)
+        self.tx.pparams.MergeFrom(parameters)
 
     def send_param_msg(self, topic, msgType):
         if self.debug:
@@ -261,12 +268,21 @@ class ParamServer():
 
         if self.debug:
             print("process command called, id: %s" % identity)
+            print(str(self.rx))
 
         if self.rx.type == MT_PING:
             self.send_command_msg(identity, MT_PING_ACKNOWLEDGE)
 
         elif self.rx.type == MT_PARAM_SET:
-            pass
+            if len(self.rx.key) == 0:
+                self.send_command_wrong_params(identity)
+                return
+
+            for key in self.rx.key:
+                if not self.set_key(key):
+                    self.send_command_wrong_params(identity)
+                    return
+            # self.send_ack() TODO
 
         elif self.rx.type == MT_PARAM_DELETE:
             pass
@@ -275,8 +291,77 @@ class ParamServer():
             self.txCommand.note.append("unknown command")
             self.send_command_msg(identity, MT_ERROR)
 
+    def set_key(self, key):
+        if not key.HasField('name'):
+            return False
+        name = key.name
+        value = None
+        if key.type == PARAM_STRING:
+            if not key.HasField('paramstring'):
+                return False
+            value = str(key.paramstring)
+        elif key.type == PARAM_BINARY:
+            if not key.HasField('parambinary'):
+                return False
+            value = str(key.parambinary)
+        elif key.type == PARAM_INTEGER:
+            if not key.HasField('paramint'):
+                return False
+            value = str(key.paramint)
+        elif key.type == PARAM_DOUBLE:
+            if not key.HasField('paramdouble'):
+                return False
+            value = str(key.paramdouble)
+        elif key.type == PARAM_DOUBLE:
+            if not key.HasField('paramlist'):
+                return False
+            return False  # TODO: implement
+        for s in self.subscriptions:
+            if s in name:
+                with kdb.KDB() as db:
+                    ks = kdb.KeySet()
+                    db.get(ks, basekey)
+                    k = ks[key]
+                    k.setValue(value)
+                return True
+        return False
+
+    def param_timer_tick(self):
+        self.ping_param()
+        self.paramTimer = threading.Timer(self.pingInterval,
+                                             self.param_timer_tick)
+        self.paramTimer.start()  # rearm timer
+
+    def start_param_heartbeat(self):
+        self.timerLock.acquire()
+        if self.paramTimer:
+            self.paramTimer.cancel()
+
+        if self.pingInterval > 0:
+            self.paramTimer = threading.Timer(self.pingInterval,
+                                               self.param_timer_tick)
+            self.paramTimer.start()
+        self.timerLock.release()
+
+    def stop_param_heartbeat(self):
+        self.timerLock.acquire()
+        if self.paramTimer:
+            self.paramTimer.cancel()
+            self.paramTimer = None
+        self.timerLock.release()
+
+    def refresh_param_heartbeat(self):
+        self.timerLock.acquire()
+        if self.paramTimer:
+            self.paramTimer.cancel()
+            self.paramTimer = threading.Timer(self.pingInterval,
+                                               self.param_timer_tick)
+            self.paramTimer.start()
+        self.timerLock.release()
+
     def stop(self):
         self.shutdown.set()
+        self.stop_param_heartbeat()
 
 
 def main():
